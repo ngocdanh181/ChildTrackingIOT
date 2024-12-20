@@ -1,6 +1,5 @@
 const mqtt = require('mqtt');
 const deviceController = require('../controllers/deviceController');
-const audioController = require('../controllers/audioController');
 const locationController = require('../controllers/locationController');
 
 class MQTTHandler {
@@ -47,7 +46,6 @@ class MQTTHandler {
         const topics = [
             'device/+/status',      // Device status updates
             'device/+/telemetry',   // Device telemetry data
-            'device/+/audio',       // Audio data
             'device/+/location'     // Location data
         ];
 
@@ -70,15 +68,17 @@ class MQTTHandler {
         const [prefix, deviceId, type] = topicParts;
 
         try {
+            console.log("\n=== MQTT Handler Received ===");
+            console.log("Topic:", topic);
+            console.log("Type:", type);
+            console.log("Message preview:", message.toString().substring(0, 100));
+
             switch (type) {
                 case 'status':
                     deviceController.handleMQTTConnection(topic, message);
                     break;
                 case 'telemetry':
                     deviceController.handleMQTTTelemetry(topic, message);
-                    break;
-                case 'audio':
-                    audioController.handleMQTTAudio(topic, message);
                     break;
                 case 'location':
                     locationController.handleMQTTLocation(topic, message);

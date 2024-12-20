@@ -26,7 +26,7 @@ exports.getLatestLocation = async (req, res) => {
 
         const location = await Location.findOne({ deviceId })
             .sort({ timestamp: -1 })
-            .select('latitude longitude timestamp metadata');
+            .select('deviceId latitude longitude timestamp metadata');
 
         if (!location) {
             return res.status(404).json({
@@ -48,39 +48,82 @@ exports.getLatestLocation = async (req, res) => {
     }
 };
 
-// Lấy lịch sử vị trí của thiết bị
-exports.getLocationHistory = async (req, res) => {
+// Bật tracking GPS
+exports.startTracking = async (req, res) => {
     try {
         const { deviceId } = req.params;
-        const { startDate, endDate, limit = 100 } = req.query;
-        
-        // Validate dates
-        if (startDate && !Date.parse(startDate) || endDate && !Date.parse(endDate)) {
+        const { interval = 10 } = req.body;
+
+        // Validate interval
+        if (interval < 5 || interval > 3600) {
             return res.status(400).json({
                 success: false,
-                error: 'Invalid date format'
+                error: 'Interval must be between 5 and 3600 seconds'
             });
         }
 
-        let query = { deviceId };
-        if (startDate || endDate) {
-            query.timestamp = {};
-            if (startDate) query.timestamp.$gte = new Date(startDate);
-            if (endDate) query.timestamp.$lte = new Date(endDate);
-        }
+        // Cập nhật trạng thái device
+        await Device.findOneAndUpdate(
+            { deviceId },
+            { 
+                isTracking: true,
+                trackingInterval: interval,
+                lastSeen: Date.now(),
+                status: 'online'
+            }
+        );
 
-        const locations = await Location.find(query)
-            .sort({ timestamp: -1 })
-            .limit(parseInt(limit))
-            .select('latitude longitude timestamp metadata');
+        // Gửi lệnh qua MQTT
+        mqtt.publish(`device/${deviceId}/control`, JSON.stringify({
+            command: 'start_tracking',
+            interval: interval
+        }));
 
         res.status(200).json({
             success: true,
-            count: locations.length,
-            data: locations
+            message: 'Started GPS tracking',
+            data: {
+                isTracking: true,
+                trackingInterval: interval
+            }
         });
     } catch (error) {
-        logger.error('Error in getLocationHistory:', error);
+        logger.error('Error in startTracking:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Server Error'
+        });
+    }
+};
+
+// Dừng tracking GPS
+exports.stopTracking = async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+
+        // Cập nhật trạng thái device
+        await Device.findOneAndUpdate(
+            { deviceId },
+            { 
+                isTracking: false,
+                lastSeen: Date.now()
+            }
+        );
+
+        // Gửi lệnh qua MQTT
+        mqtt.publish(`device/${deviceId}/control`, JSON.stringify({
+            command: 'stop_tracking'
+        }));
+
+        res.status(200).json({
+            success: true,
+            message: 'Stopped GPS tracking',
+            data: {
+                isTracking: false
+            }
+        });
+    } catch (error) {
+        logger.error('Error in stopTracking:', error);
         res.status(500).json({
             success: false,
             error: 'Server Error'
@@ -121,131 +164,9 @@ exports.handleMQTTLocation = async (topic, message) => {
             }
         });
 
-        // Cập nhật lastSeen của thiết bị
-        await Device.findOneAndUpdate(
-            { deviceId },
-            {
-                lastSeen: Date.now(),
-                status: 'online'
-            }
-        );
-
         logger.info(`Location updated for device ${deviceId}`);
 
     } catch (error) {
         logger.error('Error handling MQTT location:', error);
-    }
-};
-
-// Bật tracking GPS
-exports.startTracking = async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        const { interval = 10 } = req.body;
-
-        // Validate interval
-        if (interval < 5 || interval > 3600) {
-            return res.status(400).json({
-                success: false,
-                error: 'Interval must be between 5 and 3600 seconds'
-            });
-        }
-
-        // Gửi lệnh qua MQTT
-        mqtt.publish(`device/${deviceId}/control`, JSON.stringify({
-            command: 'start_tracking',
-            interval: interval
-        }));
-
-        res.status(200).json({
-            success: true,
-            message: 'Started GPS tracking',
-            interval: interval
-        });
-    } catch (error) {
-        logger.error('Error in startTracking:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Server Error'
-        });
-    }
-};
-
-// Dừng tracking GPS
-exports.stopTracking = async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-
-        // Gửi lệnh qua MQTT
-        mqtt.publish(`device/${deviceId}/control`, JSON.stringify({
-            command: 'stop_tracking'
-        }));
-
-        res.status(200).json({
-            success: true,
-            message: 'Stopped GPS tracking'
-        });
-    } catch (error) {
-        logger.error('Error in stopTracking:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Server Error'
-        });
-    }
-};
-
-// Lấy vị trí hiện tại
-exports.getCurrentLocation = async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-
-        // Gửi lệnh qua MQTT
-        mqtt.publish(`device/${deviceId}/control`, JSON.stringify({
-            command: 'get_location'
-        }));
-
-        res.status(202).json({
-            success: true,
-            message: 'Location request sent to device'
-        });
-    } catch (error) {
-        logger.error('Error in getCurrentLocation:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Server Error'
-        });
-    }
-};
-
-// Cập nhật interval tracking
-exports.updateTrackingInterval = async (req, res) => {
-    try {
-        const { deviceId } = req.params;
-        const { interval } = req.body;
-
-        if (!interval || interval < 5 || interval > 3600) {
-            return res.status(400).json({
-                success: false,
-                error: 'Interval must be between 5 and 3600 seconds'
-            });
-        }
-
-        // Gửi lệnh qua MQTT
-        mqtt.publish(`device/${deviceId}/control`, JSON.stringify({
-            command: 'set_tracking_interval',
-            interval: interval
-        }));
-
-        res.status(200).json({
-            success: true,
-            message: 'Updated tracking interval',
-            interval: interval
-        });
-    } catch (error) {
-        logger.error('Error in updateTrackingInterval:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Server Error'
-        });
     }
 };

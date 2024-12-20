@@ -111,33 +111,33 @@ class MQTTClient {
 
     handleMessage(topic, message) {
         try {
-            const topicParts = topic.split('/');
+            console.log("\n=== MQTT.js Received ===");
+            console.log("Topic:", topic);
+            console.log("Message preview:", message.toString().substring(0, 100));
             
+            const topicParts = topic.split('/');
             if (topicParts.length !== 3) {
                 logger.warn(`Invalid topic format: ${topic}`);
                 return;
             }
 
             const [prefix, deviceId, type] = topicParts;
-            const payload = message.toString();
+            console.log(`Processing message: type=${type}, deviceId=${deviceId}`);
 
-            // Log chi tiết message nhận được
-            logger.info(`Received ${type} message from device ${deviceId}`);
-            
+            let data;
             try {
-                // Parse JSON payload
-                const data = JSON.parse(payload);
-                logger.info(`Data: ${JSON.stringify(data, null, 2)}`);
-                
-                // Route message to appropriate handler
-                this.routeMessage(type, deviceId, data);
+                data = JSON.parse(message.toString());
+                console.log("Parsed payload:", data);
             } catch (parseError) {
-                logger.warn(`Message is not JSON format: ${payload}`);
-                // Vẫn xử lý message dạng string
-                this.routeMessage(type, deviceId, payload);
+                console.error("Failed to parse message:", parseError);
+                return;
             }
+
+            logger.info(`Received ${type} message from device ${deviceId}`);
+            this.routeMessage(type, deviceId, data);
+
         } catch (error) {
-            logger.error('Error handling MQTT message:', error);
+            console.error("Error in handleMessage:", error);
         }
     }
 
@@ -145,17 +145,14 @@ class MQTTClient {
         try {
             // Import models
             const Device = require('../models/Device');
-            const Audio = require('../models/Audio');
             const Location = require('../models/Location');
 
             // Update device last seen
             await Device.findOneAndUpdate(
                 { deviceId },
                 { 
-                    $set: { 
-                        lastSeen: new Date(),
-                        status: type === 'status' ? data : undefined
-                    }
+                    lastSeen: new Date(),
+                    status: type === 'status' ? data : undefined
                 },
                 { upsert: true }
             );
@@ -166,22 +163,14 @@ class MQTTClient {
                     logger.info(`Device ${deviceId} status: ${typeof data === 'object' ? JSON.stringify(data) : data}`);
                     break;
 
-                case 'telemetry':
-                    logger.info(`Telemetry from ${deviceId}: ${typeof data === 'object' ? JSON.stringify(data) : data}`);
-                    // Có thể thêm xử lý lưu telemetry data
-                    break;
-
                 case 'audio':
-                    logger.info(`Received audio data from ${deviceId}`);
-                    await Audio.create({
-                        deviceId,
-                        data: data,
-                        timestamp: new Date()
-                    });
+                    // Chỉ forward audio data, không lưu vào DB
+                    logger.info(`Forwarding audio data from ${deviceId}`);
+                    this.publish(`device/${deviceId}/audio`, JSON.stringify(data));
                     break;
 
                 case 'location':
-                    logger.info(`Location update from ${deviceId}: ${typeof data === 'object' ? JSON.stringify(data) : data}`);
+                    logger.info(`Location update from ${deviceId}`);
                     await Location.create({
                         deviceId,
                         ...data,

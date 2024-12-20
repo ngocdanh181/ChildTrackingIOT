@@ -54,6 +54,16 @@ const deviceSchema = new mongoose.Schema({
             type: Number,
             default: 30  // seconds
         }
+    },
+    isTracking: {
+        type: Boolean,
+        default: false
+    },
+    trackingInterval: {
+        type: Number,
+        default: 10,
+        min: 5,
+        max: 3600
     }
 }, {
     timestamps: true

@@ -9,13 +9,14 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.example.childtrackingappiot.MainActivity
 import com.example.childtrackingappiot.databinding.ActivityRegisterBinding
-import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+import com.example.childtrackingappiot.data.model.AuthState
 
-@AndroidEntryPoint
 class RegisterActivity : AppCompatActivity() {
     private lateinit var binding: ActivityRegisterBinding
-    private val viewModel: AuthViewModel by viewModels()
+    private val viewModel: AuthViewModel by viewModels { 
+        AuthViewModel.Factory(application) 
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,7 +37,7 @@ class RegisterActivity : AppCompatActivity() {
                     }
                     is AuthState.Success -> {
                         startActivity(Intent(this@RegisterActivity, MainActivity::class.java))
-                        finishAffinity()
+                        finishAffinity() // Close all activities including LoginActivity
                     }
                     is AuthState.Error -> {
                         binding.registerButton.isEnabled = true
@@ -52,7 +53,7 @@ class RegisterActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupViews(){
+    private fun setupViews() {
         binding.registerButton.setOnClickListener {
             if (validateInputs()) {
                 val name = binding.nameInput.text.toString()
@@ -61,8 +62,9 @@ class RegisterActivity : AppCompatActivity() {
                 viewModel.register(name, email, password)
             }
         }
+
         binding.loginLink.setOnClickListener {
-            finish() // Quay lại màn Login
+            finish() // Return to LoginActivity
         }
     }
 

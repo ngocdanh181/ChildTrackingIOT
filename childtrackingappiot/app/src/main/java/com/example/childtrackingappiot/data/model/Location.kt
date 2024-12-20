@@ -5,14 +5,14 @@ data class Location(
     val latitude: Double,
     val longitude: Double,
     val timestamp: String,
-    val accuracy: Float? = null,
-    val speed: Float? = null
+    val createdAt: String? = null,
+    val updatedAt: String? = null
 )
 
 sealed class LocationState {
-    object Idle : LocationState()
-    object Loading : LocationState()
-    data class Success(val location: Location) : LocationState()
+    data object Idle : LocationState()
+    data object Loading : LocationState()
+    data class Success(val latitude: Double, val longitude: Double, val address: String) : LocationState()
     data class HistorySuccess(val locations: List<Location>) : LocationState()
     data class Error(val message: String) : LocationState()
 }

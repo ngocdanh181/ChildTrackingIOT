@@ -12,9 +12,7 @@ const logger = {
         console.warn(`[WARN] ${new Date().toISOString()} - ${message}`);
     },
     debug: (message) => {
-        if (process.env.NODE_ENV === 'development') {
-            console.debug(`[DEBUG] ${new Date().toISOString()} - ${message}`);
-        }
+        console.log(`[DEBUG] ${new Date().toISOString()} - ${message}`);
     }
 };
 

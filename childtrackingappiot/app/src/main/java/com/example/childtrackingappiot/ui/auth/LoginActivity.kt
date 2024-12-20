@@ -8,14 +8,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.example.childtrackingappiot.MainActivity
+import com.example.childtrackingappiot.data.model.AuthState
 import com.example.childtrackingappiot.databinding.ActivityLoginBinding
-import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
-@AndroidEntryPoint
 class LoginActivity : AppCompatActivity() {
     private lateinit var binding: ActivityLoginBinding
-    private val viewModel: AuthViewModel by viewModels()
+    private val viewModel: AuthViewModel by viewModels { 
+        AuthViewModel.Factory(application) 
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -23,7 +24,7 @@ class LoginActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupViews()
-        observeViewModel()
+        observeAuthState()
     }
 
     private fun setupViews() {
@@ -40,7 +41,7 @@ class LoginActivity : AppCompatActivity() {
         }
     }
 
-    private fun observeViewModel() {
+    private fun observeAuthState() {
         lifecycleScope.launch {
             viewModel.authState.collect { state ->
                 when (state) {
@@ -49,8 +50,9 @@ class LoginActivity : AppCompatActivity() {
                         binding.progressBar.isVisible = true
                     }
                     is AuthState.Success -> {
+                        // Navigate to MainActivity on successful login
                         startActivity(Intent(this@LoginActivity, MainActivity::class.java))
-                        finish()
+                        finish() // Close LoginActivity
                     }
                     is AuthState.Error -> {
                         binding.loginButton.isEnabled = true
@@ -69,14 +71,17 @@ class LoginActivity : AppCompatActivity() {
     private fun validateInput(): Boolean {
         val email = binding.emailInput.text.toString()
         val password = binding.passwordInput.text.toString()
+        
         if (email.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
             binding.emailInput.error = "Valid email is required"
             return false
         }
-        if (password.length < 6) {
-            binding.passwordInput.error = "Password must be at least 6 characters"
+        
+        if (password.isEmpty()) {
+            binding.passwordInput.error = "Password is required"
             return false
         }
+        
         return true
     }
 }

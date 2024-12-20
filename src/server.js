@@ -6,27 +6,61 @@ const helmet = require('helmet');
 const compression = require('compression');
 const http = require('http');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 
 const logger = require('./utils/logger');
 const connectDB = require('./config/database');
-const mqttHandler = require('./middlewares/mqttHandler');
+const mqttClient = require('./config/mqtt');
 const errorHandler = require('./middlewares/errorHandler');
 const { apiLimiter } = require('./middlewares/rateLimiter');
+const websocket = require('./config/websocket');
 
 // Import routes
 const deviceRoutes = require('./routes/deviceRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const audioRoutes = require('./routes/audioRoutes');
+const authRoutes = require('./routes/authRoutes');
 
 // Initialize express
 const app = express();
 const server = http.createServer(app);
 
-// Connect to Database
-connectDB();
+// Initialize services
+async function initializeServices() {
+    try {
+        // Connect to MongoDB
+        await connectDB();
+        logger.info('MongoDB connected successfully');
 
-// Connect to MQTT Broker
-mqttHandler.connect();
+        // Connect to MQTT Broker
+        mqttClient.connect();
+        
+        // Wait for MQTT connection
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error('MQTT connection timeout'));
+            }, 10000); // 10 seconds timeout
+
+            const checkConnection = setInterval(() => {
+                if (mqttClient.isConnected) {
+                    clearInterval(checkConnection);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 100);
+        });
+
+        logger.info('MQTT connected successfully');
+        return true;
+    } catch (error) {
+        logger.error('Failed to initialize services:', error);
+        return false;
+    }
+}
+
+// Initialize WebSocket server
+websocket.initialize(server);
+
 
 // Security Middleware
 app.use(helmet({
@@ -64,13 +98,15 @@ app.use('/api', apiLimiter);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/audio', audioRoutes);
+app.use('/api/auth', authRoutes);
 
 // Health check route
 app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        mqtt: mqttClient.isConnected ? 'connected' : 'disconnected'
     });
 });
 
@@ -79,7 +115,7 @@ app.get('/', (req, res) => {
     res.json({
         message: 'Welcome to IoT Tracking API',
         version: process.env.API_VERSION || '1.0.0',
-        docs: '/api-docs'  // If you add Swagger documentation
+        docs: '/api-docs'
     });
 });
 
@@ -96,24 +132,33 @@ app.use(errorHandler);
 
 // Start server
 const PORT = process.env.PORT || 3000;
-const server_instance = server.listen(PORT, () => {
-    logger.info(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+
+initializeServices().then(success => {
+    if (success) {
+        server.listen(PORT, () => {
+            logger.info(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+            logger.info(`WebSocket server running on ws://localhost:${PORT}`);
+        });
+    } else {
+        logger.error('Failed to start server due to initialization errors');
+        process.exit(1);
+    }
 });
 
 // Graceful shutdown
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', () => gracefulShutdown());
+process.on('SIGINT', () => gracefulShutdown());
 
 async function gracefulShutdown() {
     logger.info('Received shutdown signal');
 
     // Close server
-    server_instance.close(() => {
+    server.close(() => {
         logger.info('HTTP server closed');
     });
 
     // Disconnect MQTT
-    mqttHandler.disconnect();
+    mqttClient.disconnect();
     logger.info('MQTT client disconnected');
 
     // Close database connection

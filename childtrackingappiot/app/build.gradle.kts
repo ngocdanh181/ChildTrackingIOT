@@ -1,8 +1,7 @@
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.jetbrains.kotlin.android)
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id ("kotlin-kapt")
-    id ("com.google.dagger.hilt.android")
 }
 
 android {
@@ -42,6 +41,8 @@ android {
     }
 }
 
+
+
 dependencies {
 
     implementation ("com.squareup.retrofit2:retrofit:2.9.0")
@@ -56,9 +57,12 @@ dependencies {
     implementation ("androidx.lifecycle:lifecycle-livedata-ktx:2.6.2")
     implementation ("androidx.activity:activity-ktx:1.8.1")
 
-    //Hilt- dagger
-    implementation ("com.google.dagger:hilt-android:2.38.1")
-    kapt ("com.google.dagger:hilt-compiler:2.38.1")
+    //mqtt client
+    implementation ("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+    implementation ("org.eclipse.paho:org.eclipse.paho.android.service:1.1.1")
+
+    //web socket
+    implementation ("org.java-websocket:Java-WebSocket:1.5.3")
 
 
     // basic library
@@ -74,3 +78,4 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 }
+

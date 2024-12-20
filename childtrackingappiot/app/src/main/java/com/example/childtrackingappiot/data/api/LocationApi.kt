@@ -1,17 +1,23 @@
 package com.example.childtrackingappiot.data.api
 
-import com.example.childtrackingappiot.data.model.Location
+import com.example.childtrackingappiot.data.model.LocationResponse
+import com.example.childtrackingappiot.data.model.TrackingStatusResponse
 import retrofit2.Response
-import retrofit2.http.GET
-import retrofit2.http.Path
+import retrofit2.http.*
 
 interface LocationApi {
-    @GET("api/location/current/{deviceId}")
-    suspend fun getCurrentLocation(@Path("deviceId") deviceId: String): Response<Location>
+    @GET("api/locations/latest/{deviceId}")   
+    suspend fun getLatestLocation(@Path("deviceId") deviceId: String): Response<LocationResponse>
 
-    @GET("api/location/latest/{deviceId}")
-    suspend fun getLatestLocation(@Path("deviceId") deviceId: String): Response<Location>
+    @GET("api/locations/track/{deviceId}/status")
+    suspend fun getTrackingStatus(@Path("deviceId") deviceId: String): Response<TrackingStatusResponse>
 
-    @GET("api/location/history/{deviceId}")
-    suspend fun getLocationHistory(@Path("deviceId") deviceId: String): Response<List<Location>>
-} 
+    @POST("api/locations/track/{deviceId}/start")
+    suspend fun startTracking(
+        @Path("deviceId") deviceId: String,
+        @Body interval: Map<String, Int>
+    ): Response<TrackingStatusResponse>
+
+    @POST("api/locations/track/{deviceId}/stop")
+    suspend fun stopTracking(@Path("deviceId") deviceId: String): Response<TrackingStatusResponse>
+}

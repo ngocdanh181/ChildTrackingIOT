@@ -3,3 +3,12 @@ node_modules/
 logs/
 *.log
 .DS_Store
+
+# Android app
+childtrackingappiot/.gradle/
+childtrackingappiot/build/
+childtrackingappiot/app/build/
+childtrackingappiot/local.properties
+childtrackingappiot/.idea/
+childtrackingappiot/*.iml
+childtrackingappiot/app/*.iml
