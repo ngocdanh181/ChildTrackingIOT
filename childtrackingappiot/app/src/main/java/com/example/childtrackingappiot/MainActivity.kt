@@ -13,8 +13,8 @@ import com.example.childtrackingappiot.ui.location.LocationViewModel
 import com.example.childtrackingappiot.ui.audio.AudioViewModel
 import com.example.childtrackingappiot.ui.audio.AudioState
 import kotlinx.coroutines.launch
-import org.eclipse.paho.client.mqttv3.*
-import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.*
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
@@ -23,6 +23,24 @@ class MainActivity : AppCompatActivity() {
     
     private val deviceId = "ESP32_001"
     
+    private val logBuffer = StringBuilder()
+    private val maxLogLines = 10
+
+    private fun addLog(message: String) {
+        val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val logMessage = "[$timestamp] $message\n"
+        
+        logBuffer.insert(0, logMessage)  // Add new log at the beginning
+        
+        // Keep only last N lines
+        val lines = logBuffer.toString().split("\n")
+        if (lines.size > maxLogLines) {
+            logBuffer.clear()
+            logBuffer.append(lines.take(maxLogLines).joinToString("\n"))
+        }
+        
+        binding.tvLog.text = logBuffer.toString()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,12 +70,16 @@ class MainActivity : AppCompatActivity() {
 
         // Audio listening button
         binding.btnListen.setOnClickListener {
-            if (audioViewModel.isListening.value) {
-                audioViewModel.stopListening(deviceId)
-                binding.btnListen.text = "Start Listening"
-            } else {
-                audioViewModel.startListening(deviceId)
-                binding.btnListen.text = "Stop Listening"
+            when (audioViewModel.audioState.value) {
+                is AudioState.Listening -> {
+                    audioViewModel.stopListening(deviceId)
+                }
+                is AudioState.Idle, is AudioState.Error -> {
+                    audioViewModel.startListening(deviceId)
+                }
+                is AudioState.Loading -> {
+                    // Do nothing while loading
+                }
             }
         }
     }
@@ -126,18 +148,20 @@ class MainActivity : AppCompatActivity() {
                     is LocationState.Loading -> {
                         binding.progressBar.isVisible = true
                         binding.btnTrackLocation.isEnabled = false
+                        addLog("Loading location...")
                     }
                     is LocationState.Success -> {
                         binding.progressBar.isVisible = false
                         binding.btnTrackLocation.isEnabled = true
                         binding.tvLocation.text = 
                             "Location: Lat ${state.latitude}, Lng ${state.longitude}\nAddress: ${state.address}"
+                        addLog("Location updated: ${state.latitude}, ${state.longitude}")
                     }
                     is LocationState.Error -> {
                         binding.progressBar.isVisible = false
                         binding.btnTrackLocation.isEnabled = true
                         binding.btnTrackLocation.text = "Start Tracking"
-                        Toast.makeText(this@MainActivity, state.message, Toast.LENGTH_SHORT).show()
+                        addLog("Location error: ${state.message}")
                     }
                     else -> {
                         binding.progressBar.isVisible = false
@@ -156,6 +180,7 @@ class MainActivity : AppCompatActivity() {
                     is AudioState.Loading -> {
                         binding.btnListen.isEnabled = false
                         binding.audioProgressBar.isVisible = true
+                        addLog("Loading audio...")
                     }
 
                     is AudioState.Listening -> {
@@ -163,6 +188,7 @@ class MainActivity : AppCompatActivity() {
                         binding.audioProgressBar.isVisible = false
                         binding.audioStatus.text = "Listening..."
                         binding.btnListen.text = "Stop Listening"
+                        addLog("Started listening")
                     }
 
                     is AudioState.Error -> {
@@ -170,7 +196,7 @@ class MainActivity : AppCompatActivity() {
                         binding.audioProgressBar.isVisible = false
                         binding.btnListen.text = "Start Listening"
                         binding.audioStatus.text = "Error: ${state.message}"
-                        Toast.makeText(this@MainActivity, state.message, Toast.LENGTH_SHORT).show()
+                        addLog("Error: ${state.message}")
                     }
 
                     is AudioState.Idle -> {
@@ -178,17 +204,18 @@ class MainActivity : AppCompatActivity() {
                         binding.audioProgressBar.isVisible = false
                         binding.audioStatus.text = "Not listening"
                         binding.btnListen.text = "Start Listening"
+                        addLog("Stopped listening")
                     }
                 }
             }
         }
-        // Observe WebSocket connection state
+
+        // WebSocket connection state chỉ để hiển thị trạng thái kết nối
         lifecycleScope.launch {
-            audioViewModel.isListening.collect { isListening ->
-                binding.audioStatus.text = if (isListening) "Connected to audio stream" else "Disconnected"
+            audioViewModel.isListening.collect { isConnected ->
+                addLog(if (isConnected) "WebSocket connected" else "WebSocket disconnected")
             }
         }
-
     }
 
     override fun onDestroy() {

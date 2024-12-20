@@ -1,6 +1,7 @@
 package com.example.childtrackingappiot.ui.audio
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.childtrackingappiot.audio.AudioPlayer
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class AudioViewModel(application: Application) : AndroidViewModel(application) {
+    private val TAG = "AudioViewModel"
     private val repository: AudioRepository = AudioRepository.getInstance(application)
     private val audioPlayer: AudioPlayer = AudioPlayer()
 
@@ -19,19 +21,27 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
 
     val isListening = audioPlayer.isPlaying
 
+    init {
+        try {
+            audioPlayer.initialize(deviceId = "ESP32_001",sampleRate = 16000, channelCount = 1)
+        } catch (e: Exception) {
+            _audioState.value = AudioState.Error("Failed to initialize audio: ${e.message}")
+        }
+    }
+
     fun startListening(deviceId: String) {
         viewModelScope.launch {
+            Log.d(TAG, "Starting listening process for device: $deviceId")
             _audioState.value = AudioState.Loading
             try {
-                // First, tell server to start ESP32 recording
                 when (val result = repository.startListening(deviceId)) {
                     is Resource.Success -> {
-                        // Then initialize WebSocket connection
-                        audioPlayer.initialize(deviceId)
-                        audioPlayer.startPlayback()
+                        Log.d(TAG, "Server accepted start listening request")
+                        audioPlayer.startPlayback()  // Chỉ start AudioTrack
                         _audioState.value = AudioState.Listening
                     }
                     is Resource.Error -> {
+                        Log.e(TAG, "Failed to start listening: ${result.message}")
                         _audioState.value = AudioState.Error(result.message)
                     }
                     is Resource.Loading -> {
@@ -39,6 +49,7 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "Error in startListening", e)
                 _audioState.value = AudioState.Error("Failed to start listening: ${e.message}")
             }
         }
@@ -46,16 +57,17 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopListening(deviceId: String) {
         viewModelScope.launch {
+            Log.d(TAG, "Stopping listening process for device: $deviceId")
             try {
-                // First stop WebSocket connection
                 audioPlayer.stopPlayback()
                 
-                // Then tell server to stop ESP32 recording
                 when (val result = repository.stopListening(deviceId)) {
                     is Resource.Success -> {
+                        Log.d(TAG, "Successfully stopped listening")
                         _audioState.value = AudioState.Idle
                     }
                     is Resource.Error -> {
+                        Log.e(TAG, "Error stopping listening: ${result.message}")
                         _audioState.value = AudioState.Error(result.message)
                     }
                     is Resource.Loading -> {
@@ -63,6 +75,7 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "Error in stopListening", e)
                 _audioState.value = AudioState.Error("Failed to stop listening: ${e.message}")
             }
         }
@@ -70,6 +83,7 @@ class AudioViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        Log.d(TAG, "ViewModel cleared, releasing resources")
         audioPlayer.release()
     }
 }

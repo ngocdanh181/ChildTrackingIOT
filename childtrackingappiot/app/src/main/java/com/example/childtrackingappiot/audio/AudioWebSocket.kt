@@ -7,30 +7,30 @@ import java.net.URI
 import java.nio.ByteBuffer
 
 class AudioWebSocket(
-    private val serverUri: URI,
+    serverUri: URI,
     private val deviceId: String,
     private val onAudioDataReceived: (ByteArray) -> Unit,
     private val onConnectionStateChanged: (Boolean) -> Unit
 ) : WebSocketClient(serverUri) {
 
-    init {
-        addHeader("type", "android")
-        addHeader("deviceId", deviceId)
-    }
-
     override fun onOpen(handshakedata: ServerHandshake?) {
-        Log.d(TAG, "WebSocket Connected")
+        Log.d(TAG, "WebSocket Connected to: $uri")
         onConnectionStateChanged(true)
     }
 
     override fun onMessage(message: String) {
         // Handle text messages if needed
+        Log.d(TAG, "Received text message: $message")
     }
 
     override fun onMessage(bytes: ByteBuffer) {
-        // Handle binary audio data
-        val audioData = bytes.array()
-        onAudioDataReceived(audioData)
+        try {
+            val audioData = bytes.array()
+            Log.d(TAG, "Received audio data: ${audioData.size} bytes")
+            onAudioDataReceived(audioData)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error processing audio data: ${e.message}")
+        }
     }
 
     override fun onClose(code: Int, reason: String?, remote: Boolean) {

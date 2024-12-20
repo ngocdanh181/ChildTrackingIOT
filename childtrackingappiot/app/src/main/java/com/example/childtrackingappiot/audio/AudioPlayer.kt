@@ -6,21 +6,39 @@ import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.net.URI
+import java.util.ArrayDeque
 
 class AudioPlayer {
     private var audioTrack: AudioTrack? = null
     private var webSocket: AudioWebSocket? = null
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying
+    private var isAudioTrackPlaying = false
+
+    private val audioBuffer = ArrayDeque<ByteArray>()
+    private val bufferLock = Object()
+    private var isProcessing = false
 
     fun initialize(deviceId: String, sampleRate: Int = 16000, channelCount: Int = 1) {
         try {
+            setupAudioTrack(sampleRate, channelCount)
+            setupWebSocket(deviceId)
+        } catch (e: Exception) {
+            Log.e("AudioPlayer", "Error initializing: ${e.message}")
+        }
+    }
+
+    private fun setupAudioTrack(sampleRate: Int, channelCount: Int) {
+        if (audioTrack == null) {
             val minBufferSize = AudioTrack.getMinBufferSize(
                 sampleRate,
                 if (channelCount == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO,
@@ -44,50 +62,84 @@ class AudioPlayer {
                 .setBufferSizeInBytes(minBufferSize * 2)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
+        }
+    }
 
-            // Initialize WebSocket with correct URL format
-            val uri = URI("ws://192.168.1.5:3000/audio?type=android&deviceId=$deviceId")
+    private fun setupWebSocket(deviceId: String) {
+        if (webSocket == null) {
+            val wsUrl = "ws://192.168.1.5:3000/audio?type=android&deviceId=$deviceId"
+            Log.d("AudioPlayer", "Initializing WebSocket: $wsUrl")
+            
             webSocket = AudioWebSocket(
-                serverUri = uri,
-                deviceId = deviceId,
+                URI(wsUrl),
+                deviceId,
                 onAudioDataReceived = { audioData ->
-                    processAudioData(audioData)
+                    synchronized(bufferLock) {
+                        audioBuffer.addLast(audioData)
+                        if (!isProcessing) {
+                            isProcessing = true
+                            scope.launch(Dispatchers.IO) {
+                                processAudioBuffer()
+                            }
+                        }
+                    }
                 },
                 onConnectionStateChanged = { isConnected ->
-                    _isPlaying.value = isConnected
+                    Log.d("AudioPlayer", "WebSocket connection state: $isConnected")
+                    _isPlaying.value = isConnected && isAudioTrackPlaying
+                    
+                    if (!isConnected) {
+                        scope.launch {
+                            delay(5000)
+                            webSocket?.connect()
+                        }
+                    }
                 }
             )
-        } catch (e: Exception) {
-            Log.e("AudioPlayer", "Error initializing: ${e.message}")
+            webSocket?.connect()
         }
+    }
+
+    private suspend fun processAudioBuffer() {
+        while (isAudioTrackPlaying) {
+            val audioData = synchronized(bufferLock) {
+                if (audioBuffer.isEmpty()) {
+                    isProcessing = false
+                    null
+                } else {
+                    audioBuffer.removeFirst()
+                }
+            } ?: break
+
+            try {
+                val written = audioTrack?.write(audioData, 0, audioData.size, AudioTrack.WRITE_BLOCKING)
+                Log.d("AudioPlayer", "Written $written bytes to AudioTrack")
+                delay(10) // Add small delay between writes
+            } catch (e: Exception) {
+                Log.e("AudioPlayer", "Error processing audio: ${e.message}")
+                break
+            }
+        }
+        isProcessing = false
     }
 
     fun startPlayback() {
         try {
             audioTrack?.play()
-            webSocket?.connect()
-            _isPlaying.value = true
+            isAudioTrackPlaying = true
+            _isPlaying.value = webSocket?.isOpen == true
         } catch (e: Exception) {
             Log.e("AudioPlayer", "Error starting playback: ${e.message}")
         }
     }
 
-    private fun processAudioData(audioData: ByteArray) {
-        if (!_isPlaying.value) return
-
-        scope.launch {
-            try {
-                audioTrack?.write(audioData, 0, audioData.size)
-            } catch (e: Exception) {
-                Log.e("AudioPlayer", "Error processing audio: ${e.message}")
-            }
-        }
-    }
-
     fun stopPlayback() {
         try {
-            audioTrack?.stop()
-            webSocket?.close()
+            isAudioTrackPlaying = false
+            synchronized(bufferLock) {
+                audioBuffer.clear()
+            }
+            audioTrack?.pause()
             _isPlaying.value = false
         } catch (e: Exception) {
             Log.e("AudioPlayer", "Error stopping playback: ${e.message}")
@@ -99,7 +151,9 @@ class AudioPlayer {
             stopPlayback()
             audioTrack?.release()
             audioTrack = null
+            webSocket?.close()
             webSocket = null
+            scope.cancel()
         } catch (e: Exception) {
             Log.e("AudioPlayer", "Error releasing: ${e.message}")
         }

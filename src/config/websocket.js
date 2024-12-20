@@ -4,60 +4,41 @@ const logger = require('../utils/logger');
 class WebSocketServer {
     constructor() {
         this.wss = null;
-        this.devices = new Map();  // Map để lưu các ESP32 connections
-        this.clients = new Map();  // Map để lưu các Android client connections
+        this.devices = new Map();  // ESP32: deviceId -> ws
+        this.clients = new Map();  // Android: deviceId -> ws
     }
 
     initialize(server) {
-        this.wss = new WebSocket.Server({ 
-            server,
-            clientTracking: true,
-            verifyClient: (info, cb) => {
-                logger.info("WebSocket connection request from:", info.req.socket.remoteAddress);
-                logger.info("Request URL:", info.req.url);
-                cb(true);
-            }
-        });
-
-        this.wss.on('listening', () => {
-            logger.info('WebSocket server is listening');
-        });
-
-        this.wss.on('error', (error) => {
-            logger.error('WebSocket server error:', error);
-        });
-
-        // Log khi WebSocket server khởi động
-        logger.info('WebSocket server initializing...');
+        this.wss = new WebSocket.Server({ server });
 
         this.wss.on('connection', (ws, req) => {
             const url = new URL(req.url, `ws://${req.headers.host}`);
-            const deviceId = url.pathname.split('/').pop();
+            const deviceId = url.searchParams.get('deviceId');
             const clientType = url.searchParams.get('type');
 
-            logger.info('New WebSocket connection attempt:');
-            logger.info(`URL: ${req.url}`);
-            logger.info(`Client Type: ${clientType}`);
-            logger.info(`Device ID: ${deviceId}`);
-            logger.info(`Client IP: ${req.socket.remoteAddress}`);
+            logger.info(`New WebSocket connection: ${clientType} for device ${deviceId}`);
 
+            if (!deviceId) {
+                logger.error('No deviceId provided');
+                ws.close();
+                return;
+            }
+
+            // Lưu connection theo deviceId
             if (clientType === 'esp32') {
                 this.devices.set(deviceId, ws);
-                logger.info(`ESP32 ${deviceId} connected. Total ESP32 devices: ${this.devices.size}`);
+                logger.info(`ESP32 ${deviceId} connected`);
             } else if (clientType === 'android') {
                 this.clients.set(deviceId, ws);
-                logger.info(`Android client for ${deviceId} connected. Total Android clients: ${this.clients.size}`);
+                logger.info(`Android client for ${deviceId} connected`);
             }
 
             ws.on('message', (data) => {
                 if (clientType === 'esp32') {
-                    // Log audio data metrics
-                    logger.info(`Received audio data from ESP32 ${deviceId}. Size: ${data.length} bytes`);
-                    
                     const client = this.clients.get(deviceId);
                     if (client && client.readyState === WebSocket.OPEN) {
                         client.send(data);
-                        logger.info(`Forwarded audio data to Android client for ${deviceId}`);
+                        logger.info(`Forwarded ${data.length} bytes to Android client ${deviceId}`);
                     } else {
                         logger.warn(`No active Android client for ${deviceId}`);
                     }
