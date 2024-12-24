@@ -1,9 +1,11 @@
 package com.example.childtrackingappiot.audio
 
+import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
+import com.example.childtrackingappiot.utils.PrefsManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,7 +17,7 @@ import kotlinx.coroutines.launch
 import java.net.URI
 import java.util.ArrayDeque
 
-class AudioPlayer {
+class AudioPlayer(private val context: Context) {
     private var audioTrack: AudioTrack? = null
     private var webSocket: AudioWebSocket? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -67,7 +69,13 @@ class AudioPlayer {
 
     private fun setupWebSocket(deviceId: String) {
         if (webSocket == null) {
-            val wsUrl = "ws://192.168.1.5:3000/audio?type=android&deviceId=$deviceId"
+            val wsServer = PrefsManager.getInstance(context).getWsServer()
+            if (wsServer.isNullOrEmpty()) {
+                Log.e("AudioPlayer", "WebSocket server URL not configured")
+                return
+            }
+
+            val wsUrl = "$wsServer/audio?type=android&deviceId=$deviceId"
             Log.d("AudioPlayer", "Initializing WebSocket: $wsUrl")
             
             webSocket = AudioWebSocket(

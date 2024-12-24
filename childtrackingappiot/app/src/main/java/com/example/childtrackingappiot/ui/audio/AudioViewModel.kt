@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 class AudioViewModel(application: Application) : AndroidViewModel(application) {
     private val TAG = "AudioViewModel"
     private val repository: AudioRepository = AudioRepository.getInstance(application)
-    private val audioPlayer: AudioPlayer = AudioPlayer()
+    private val audioPlayer = AudioPlayer(application.applicationContext)
 
     private val _audioState = MutableStateFlow<AudioState>(AudioState.Idle)
     val audioState: StateFlow<AudioState> = _audioState

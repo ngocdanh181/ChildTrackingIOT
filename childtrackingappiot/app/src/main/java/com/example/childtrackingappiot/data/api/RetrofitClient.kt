@@ -10,15 +10,18 @@ import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
-    private const val BASE_URL = "http://192.168.1.5:3000/"
+    private var baseUrl: String = ""
+    private var retrofit: Retrofit? = null
     private var prefsManager: PrefsManager? = null
 
     fun init(context: Context) {
         prefsManager = PrefsManager.getInstance(context)
+        baseUrl = prefsManager?.getHttpServer() ?: ""
     }
 
-    fun setToken(newToken: String) {
-        prefsManager?.saveToken(newToken)
+    fun updateBaseUrl(newBaseUrl: String) {
+        baseUrl = newBaseUrl
+        retrofit = null  // Force rebuild with new URL
     }
 
     private val authInterceptor = Interceptor { chain ->
@@ -32,7 +35,6 @@ object RetrofitClient {
         
         val response = chain.proceed(request)
         
-        // Handle unauthorized response
         if (response.code == 401) {
             prefsManager?.clearToken()
         }
@@ -50,13 +52,21 @@ object RetrofitClient {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL)
-        .addConverterFactory(GsonConverterFactory.create())
-        .client(client)
-        .build()
+    private fun getRetrofit(): Retrofit {
+        if (retrofit == null) {
+            if (baseUrl.isEmpty()) {
+                throw IllegalStateException("Base URL not initialized. Call init() first")
+            }
+            retrofit = Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .addConverterFactory(GsonConverterFactory.create())
+                .client(client)
+                .build()
+        }
+        return retrofit!!
+    }
 
-    val authApi: AuthApi = retrofit.create(AuthApi::class.java)
-    val locationApi: LocationApi = retrofit.create(LocationApi::class.java)
-    val audioApi: AudioApi = retrofit.create(AudioApi::class.java)
+    val authApi: AuthApi by lazy { getRetrofit().create(AuthApi::class.java) }
+    val locationApi: LocationApi by lazy { getRetrofit().create(LocationApi::class.java) }
+    val audioApi: AudioApi by lazy { getRetrofit().create(AudioApi::class.java) }
 }

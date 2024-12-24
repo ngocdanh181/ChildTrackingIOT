@@ -20,19 +20,19 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val _authState = MutableStateFlow<AuthState>(AuthState.Idle)
     val authState: StateFlow<AuthState> = _authState
 
-    init {
+    /*init {
         // Check if user is already logged in
         prefsManager.getToken()?.let {
             _authState.value = AuthState.Success(it)
         }
-    }
+    }*/
 
     fun login(email: String, password: String) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading
             when (val result = repository.login(email, password)) {
                 is Resource.Success -> {
-                    RetrofitClient.setToken(result.data)
+                    //RetrofitClient.setToken(result.data)
                     prefsManager.saveToken(result.data)
                     _authState.value = AuthState.Success(result.data)
                 }
@@ -51,7 +51,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             _authState.value = AuthState.Loading
             when (val result = repository.register(name, email, password)) {
                 is Resource.Success -> {
-                    RetrofitClient.setToken(result.data)
+                    //RetrofitClient.setToken(result.data)
                     prefsManager.saveToken(result.data)
                     _authState.value = AuthState.Success(result.data)
                 }

@@ -65,31 +65,38 @@ class LocationViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun startLocationUpdates(deviceId: String) {
-        trackingJob?.cancel()
-        trackingJob = viewModelScope.launch {
-            repository.trackLocationUpdates(deviceId)
-                .catch { e ->
-                    _locationState.value = LocationState.Error(e.message ?: "Error tracking location")
-                }
-                .collect { result ->
-                    when (result) {
-                        is Resource.Success -> {
-                            //_locationState.value = LocationState.Success(result.data)
-                            val location = result.data
-                            val address = getAddressFromCoordinates(location.latitude, location.longitude)
-                            _locationState.value = LocationState.Success(location.latitude, location.longitude, address)
+    trackingJob?.cancel()
+    trackingJob = viewModelScope.launch {
+        repository.trackLocationUpdates(deviceId)
+            .catch { e ->
+                _locationState.value = LocationState.Error(e.message ?: "Error tracking location")
+            }
+            .collect { result ->
+                when (result) {
+                    is Resource.Success -> {
+                        val location = result.data
+                        val currentTime = System.currentTimeMillis()
+                        val locationTime = location.updatedAt // Assuming location has a time property in milliseconds
 
-                        }
-                        is Resource.Error -> {
-                            _locationState.value = LocationState.Error(result.message)
-                        }
-                        is Resource.Loading -> {
-                            _locationState.value = LocationState.Loading
+                        if (locationTime != null) {
+                            if ((currentTime - locationTime.toLong()) > 15 * 60 * 1000) { // 15 minutes in milliseconds
+                                _locationState.value = LocationState.Error("Location data is older than 15 minutes")
+                            } else {
+                                val address = getAddressFromCoordinates(location.latitude, location.longitude)
+                                _locationState.value = LocationState.Success(location.latitude, location.longitude, address)
+                            }
                         }
                     }
+                    is Resource.Error -> {
+                        _locationState.value = LocationState.Error(result.message)
+                    }
+                    is Resource.Loading -> {
+                        _locationState.value = LocationState.Loading
+                    }
                 }
-        }
+            }
     }
+}
 
     private fun getAddressFromCoordinates(latitude: Double, longitude: Double): String {
         return try {

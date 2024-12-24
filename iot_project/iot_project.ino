@@ -3,151 +3,294 @@
 #include <TinyGPS++.h>
 #include <ArduinoJson.h>
 #include <driver/i2s.h>
-#include <base64.h>
 #include <WebSocketsClient.h>
+#include <SoftwareSerial.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 
-// WiFi credentials
+// Network settings
 const char* ssid = "P1506";
 const char* password = "19011994";
+const char* gprs_apn = "internet.vietnamobile.com.vn";
+const char* gprs_user = "mms";
+const char* gprs_pass = "mms";
 
-
-// MQTT Broker settings
+// Server settings
 const char* mqtt_server = "192.168.1.5";
 const int mqtt_port = 1883;
-
-//WebSocket Settings
 const char* ws_host = "192.168.1.5";
-const int ws_port = 8080;
-
-
-// Device settings
+const int ws_port = 3000;
 const char* deviceId = "ESP32_001";
 
-// GPS settings (NEO-6M)
+// Pin definitions
+// GPS Module
 #define GPS_RX 16
 #define GPS_TX 17
 #define GPS_BAUD 9600
 
-// I2S settings for INMP441
+// INMP441 Microphone
 #define I2S_WS 25
 #define I2S_SD 33
 #define I2S_SCK 32
 #define I2S_PORT I2S_NUM_0
 #define I2S_SAMPLE_RATE 16000
 #define I2S_SAMPLE_BITS 16
-#define I2S_BUFFER_SIZE 256  // Giảm từ 512 xuống 256
+#define I2S_BUFFER_SIZE 256
+
+// SIM800L Module
+#define SIM800_TX 4  // ESP32 GPIO4 -> SIM800L RX
+#define SIM800_RX 2  // ESP32 GPIO2 -> SIM800L TX
+#define SIM800_RST 5 // ESP32 GPIO5 -> SIM800L RST
 
 // State variables
 bool isTracking = false;
 bool isListening = false;
 unsigned long lastGPSUpdate = 0;
-unsigned long gpsInterval = 10000; // 10 seconds default
+unsigned long gpsInterval = 10000;
+unsigned long lastNetworkCheck = 0;
+const unsigned long NETWORK_CHECK_INTERVAL = 30000;
+
+// Connection state
+enum ConnectionType {
+    NONE,
+    WIFI,
+    GPRS
+};
+ConnectionType activeConnection = NONE;
 
 // Objects
-WiFiClient espClient;
-PubSubClient mqtt(espClient);
-TinyGPSPlus gps;
-HardwareSerial gpsSerial(1);  // UART1 for GPS
+SoftwareSerial simSerial(SIM800_RX, SIM800_TX);
+WiFiClient wifiClient;
+WiFiClient gprsClient;
+PubSubClient mqtt;
 WebSocketsClient webSocket;
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1);
 
-// Function declarations
-void setupWiFi();
-void setupGPS();
-void setupWebSocket();
-void setupI2S();
-void setupMQTT();
-void handleMQTTMessage(char* topic, byte* payload, unsigned int length);
-void publishGPSData();
-void publishAudioData();
-void reconnectMQTT();
+// Định nghĩa handles cho tasks
+TaskHandle_t gpsTaskHandle = NULL;
+TaskHandle_t audioTaskHandle = NULL;
+TaskHandle_t networkTaskHandle = NULL;
+
+// Semaphores để đồng bộ hóa
+SemaphoreHandle_t networkMutex;
+SemaphoreHandle_t i2sMutex;
 
 void setup() {
     Serial.begin(115200);
     
-    setupWiFi();
+    // Khởi tạo semaphores
+    networkMutex = xSemaphoreCreateMutex();
+    i2sMutex = xSemaphoreCreateMutex();
+    
+    setupSIM800L();
+    setupNetwork();
     setupGPS();
     setupI2S();
-    setupMQTT();
-    setupWebSocket();
+    
+    // Tạo các tasks
+    xTaskCreatePinnedToCore(
+        networkTask,    // Task function
+        "NetworkTask",  // Task name
+        10000,         // Stack size
+        NULL,          // Parameters
+        2,             // Priority
+        &networkTaskHandle,  // Task handle
+        0              // Core ID (0)
+    );
+    
+    xTaskCreatePinnedToCore(
+        gpsTask,
+        "GPSTask",
+        5000,
+        NULL,
+        1,
+        &gpsTaskHandle,
+        1              // Core ID (1)
+    );
+    
+    xTaskCreatePinnedToCore(
+        audioTask,
+        "AudioTask",
+        10000,
+        NULL,
+        1,
+        &audioTaskHandle,
+        1              // Core ID (1)
+    );
+}
+
+// Network task - xử lý MQTT và WebSocket
+void networkTask(void * parameter) {
+    for(;;) {
+        if (xSemaphoreTake(networkMutex, portMAX_DELAY)) {
+            ensureConnection();
+            webSocket.loop();
+            mqtt.loop();
+            xSemaphoreGive(networkMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// GPS task
+void gpsTask(void * parameter) {
+    for(;;) {
+        if (isTracking && gpsSerial.available()) {
+            if (gps.encode(gpsSerial.read())) {
+                if (millis() - lastGPSUpdate >= gpsInterval) {
+                    if (xSemaphoreTake(networkMutex, portMAX_DELAY)) {
+                        publishGPSData();
+                        xSemaphoreGive(networkMutex);
+                        lastGPSUpdate = millis();
+                    }
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+// Audio task
+void audioTask(void * parameter) {
+    for(;;) {
+        if (isListening) {
+            if (xSemaphoreTake(i2sMutex, portMAX_DELAY)) {
+                size_t bytesRead = 0;
+                uint8_t i2sBuffer[I2S_BUFFER_SIZE];
+                
+                if (i2s_read(I2S_PORT, i2sBuffer, I2S_BUFFER_SIZE, &bytesRead, portMAX_DELAY) == ESP_OK) {
+                    if (bytesRead > 0) {
+                        if (xSemaphoreTake(networkMutex, portMAX_DELAY)) {
+                            webSocket.sendBIN(i2sBuffer, bytesRead);
+                            xSemaphoreGive(networkMutex);
+                        }
+                    }
+                }
+                xSemaphoreGive(i2sMutex);
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));  // Shorter delay for audio
+    }
 }
 
 void loop() {
-  webSocket.loop();
-    if (!mqtt.connected()) {
-        reconnectMQTT();
-    }
-    mqtt.loop();
+    // Loop chính trống vì đã dùng FreeRTOS tasks
+    vTaskDelay(portMAX_DELAY);
+}
 
-    // Handle GPS
-    while (gpsSerial.available() > 0) {
-        if (gps.encode(gpsSerial.read())) {
-            if (isTracking && (millis() - lastGPSUpdate >= gpsInterval)) {
-                publishGPSData();
-                lastGPSUpdate = millis();
-            }
+void setupSIM800L() {
+    pinMode(SIM800_RST, OUTPUT);
+    digitalWrite(SIM800_RST, HIGH);
+    
+    simSerial.begin(9600);
+    delay(3000);
+    
+    Serial.println("Initializing SIM800L...");
+    
+    // Basic AT commands
+    sendATCommand("AT");
+    sendATCommand("AT+CFUN=1");
+    
+    // Wait for network registration
+    int attempts = 0;
+    while (attempts < 10) {
+        if (sendATCommand("AT+CREG?").indexOf("+CREG: 0,1") > -1) {
+            Serial.println("Registered to network");
+            break;
         }
-    }
-
-    // Handle Audio
-    if (isListening) {
-        publishAudioData();
+        delay(2000);
+        attempts++;
     }
 }
 
-void setupWiFi() {
+String sendATCommand(String command) {
+    simSerial.println(command);
+    delay(500);
+    String response = "";
+    while (simSerial.available()) {
+        response += (char)simSerial.read();
+    }
+    Serial.println("AT Command: " + command);
+    Serial.println("Response: " + response);
+    return response;
+}
+
+bool connectWiFi() {
     Serial.println("Connecting to WiFi...");
     WiFi.begin(ssid, password);
     
-    while (WiFi.status() != WL_CONNECTED) {
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
         delay(500);
         Serial.print(".");
+        attempts++;
     }
     
-    Serial.println("\nWiFi connected");
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi connected");
+        return true;
+    }
+    
+    Serial.println("\nWiFi connection failed");
+    return false;
 }
 
-void setupGPS() {
-    gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
-    Serial.println("GPS initialized");
+bool connectGPRS() {
+    Serial.println("Connecting to GPRS...");
+    
+    sendATCommand("AT+SAPBR=3,1,\"Contype\",\"GPRS\"");
+    sendATCommand("AT+SAPBR=3,1,\"APN\",\"" + String(gprs_apn) + "\"");
+    
+    if (strlen(gprs_user) > 0) {
+        sendATCommand("AT+SAPBR=3,1,\"USER\",\"" + String(gprs_user) + "\"");
+    }
+    
+    if (strlen(gprs_pass) > 0) {
+        sendATCommand("AT+SAPBR=3,1,\"PWD\",\"" + String(gprs_pass) + "\"");
+    }
+    
+    String response = sendATCommand("AT+SAPBR=1,1");
+    delay(3000);
+    
+    response = sendATCommand("AT+SAPBR=2,1");
+    if (response.indexOf("+SAPBR: 1,1") > -1) {
+        Serial.println("GPRS connected");
+        return true;
+    }
+    
+    return false;
 }
 
-void setupI2S() {
-    esp_err_t err;
-
-    const i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-        .sample_rate = I2S_SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-        .communication_format = I2S_COMM_FORMAT_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = I2S_BUFFER_SIZE,
-        .use_apll = false,
-        .tx_desc_auto_clear = false,
-        .fixed_mclk = 0
-    };
-
-    const i2s_pin_config_t pin_config = {
-        .bck_io_num = I2S_SCK,
-        .ws_io_num = I2S_WS,
-        .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = I2S_SD
-    };
-
-    err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
-    if (err != ESP_OK) {
-        Serial.println("Failed to install I2S driver");
-        return;
+void ensureConnection() {
+    if (activeConnection == WIFI && WiFi.status() != WL_CONNECTED) {
+        Serial.println("WiFi connection lost");
+        if (!connectWiFi()) {
+            switchToGPRS();
+        }
+    } else if (activeConnection == GPRS) {
+        if (connectWiFi()) {
+            switchToWiFi();
+        }
     }
+}
 
-    err = i2s_set_pin(I2S_PORT, &pin_config);
-    if (err != ESP_OK) {
-        Serial.println("Failed to set I2S pins");
-        return;
+void switchToGPRS() {
+    if (connectGPRS()) {
+        activeConnection = GPRS;
+        mqtt.setClient(gprsClient);
+        reconnectMQTT();
+    } else {
+        activeConnection = NONE;
     }
+}
 
-    Serial.println("I2S initialized");
+void switchToWiFi() {
+    activeConnection = WIFI;
+    mqtt.setClient(wifiClient);
+    reconnectMQTT();
 }
 
 void setupMQTT() {
@@ -298,4 +441,48 @@ void reconnectMQTT() {
             delay(5000);
         }
     }
+}
+
+void setupGPS() {
+    gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
+    Serial.println("GPS initialized");
+}
+
+void setupI2S() {
+    esp_err_t err;
+
+    const i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+        .sample_rate = I2S_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = I2S_COMM_FORMAT_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = I2S_BUFFER_SIZE,
+        .use_apll = false,
+        .tx_desc_auto_clear = false,
+        .fixed_mclk = 0
+    };
+
+    const i2s_pin_config_t pin_config = {
+        .bck_io_num = I2S_SCK,
+        .ws_io_num = I2S_WS,
+        .data_out_num = I2S_PIN_NO_CHANGE,
+        .data_in_num = I2S_SD
+    };
+
+    err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+    if (err != ESP_OK) {
+        Serial.println("Failed to install I2S driver");
+        return;
+    }
+
+    err = i2s_set_pin(I2S_PORT, &pin_config);
+    if (err != ESP_OK) {
+        Serial.println("Failed to set I2S pins");
+        return;
+    }
+
+    Serial.println("I2S initialized");
 }
